@@ -1,0 +1,29 @@
+{
+  "name": "elm-todo-spa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.2.2"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.23",
+    "cssnano": "^7.1.2",
+    "elm": "^0.19.1-6",
+    "elm-format": "^0.8.7",
+    "elm-review": "^2.13.5",
+    "elm-test": "^0.19.1-revision17",
+    "postcss": "^8.5.6",
+    "sass-embedded": "^1.97.2",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0",
+    "vite-plugin-elm": "^3.0.0",
+    "vite-plugin-singlefile": "^2.3.0"
+  }
+}

@@ -1,0 +1,34 @@
+# ──────────────────────────────────────────────────────────────
+# TODO - MASTER GITIGNORE
+# ──────────────────────────────────────────────────────────────
+
+# BACKEND
+
+# FRONTEND
+todo_frontend/node_modules/
+todo_frontend/elm-stuff/
+todo_frontend/elm-stuff/
+todo_frontend/dist/
+todo_frontend/.vite/
+todo_frontend/deps/
+package-lock.json
+node_modules/
+/elm-stuff/
+.vite/
+deps/
+
+# ASSETS
+**/*.jpeg
+**/*.jpg
+**/*.png
+**/*.svg
+
+**/*.woff2
+**/*.woff
+**/*.ttf
+**/*.eot
+
+# DATA 
+secret.key
+/data/*.json
+!/data/config.json.template
