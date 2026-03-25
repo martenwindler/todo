@@ -350,3 +350,66 @@ input[type=checkbox] {
 .task-controls, .task-list li {
     padding: .5rem 0rem 0rem 1rem;
 }
+
+/* 
+X
+*/
+
+.progress-holder {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: linear-gradient(90deg,#5c3df5,#3d5cf5); // yellowgreen
+  overflow: hidden;
+  flex-shrink: 0; // Prevent squishing in flex rows
+}
+
+.semi-circle {
+  width: 100%;
+  height: 100%;
+  background: inherit;
+  border-radius: 50%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.left-block {
+  width: 50%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #ccc;
+  border-top-left-radius: 50% 50%;
+  border-bottom-left-radius: 50% 50%;
+}
+
+.right-block {
+  width: 50%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  background: #ccc;
+  border-top-right-radius: 50% 50%;
+  border-bottom-right-radius: 50% 50%;
+  transform-origin: left center;
+  transition: transform 0.3s ease; // Added smooth transition
+}
+
+.mask {
+  position: absolute;
+  background: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  span {
+    color: linear-gradient(90deg,#5c3df5,#3d5cf5);
+    font-weight: bold;
+    font-family: Arial, sans-serif;
+  }
+}
