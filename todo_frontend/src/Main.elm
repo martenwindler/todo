@@ -86,16 +86,8 @@ encodeTask (Task t) =
                             Nothing -> Encode.null)
         ]
 
-encodeTag : Tag -> Encode.Value
-encodeTag tag =
-    Encode.object [ ("name", Encode.string tag.name), ("colour", Encode.string tag.colour) ]
-
-encodeInputs : Model -> Encode.Value
-encodeInputs model =
-    Encode.object 
-        [ ("taskInput", Encode.string model.input)
-        , ("tagInput", Encode.string model.tagInput) 
-        ]
+encodeTag tag = Encode.object [ ("name", Encode.string tag.name), ("colour", Encode.string tag.colour) ]
+encodeInputs model = Encode.object [ ("taskInput", Encode.string model.input), ("tagInput", Encode.string model.tagInput) ]
 
 -- 3. JSON DECODERS
 
@@ -122,9 +114,7 @@ taskDecoder =
         (Decode.lazy (\_ -> Decode.field "subtasks" (Decode.list taskDecoder)))
         (Decode.maybe (Decode.field "deadline" Decode.int))
 
-tagDecoder : Decoder Tag
-tagDecoder = 
-    Decode.map2 Tag (Decode.field "name" Decode.string) (Decode.field "colour" Decode.string)
+tagDecoder = Decode.map2 Tag (Decode.field "name" Decode.string) (Decode.field "colour" Decode.string)
 
 -- 4. UPDATE
 
@@ -157,16 +147,7 @@ updateWithStorage msg model =
             DeleteGlobalTag _ -> True
             _ -> False
         
-        saveCmds = 
-            if isChange then 
-                Cmd.batch 
-                    [ Ports.saveTasks (Encode.list encodeTask newModel.tasks)
-                    , Ports.saveTags (Encode.list encodeTag newModel.tags)
-                    , Ports.saveInputs (encodeInputs newModel)
-                    , Task.perform RecordSaveTime Time.now 
-                    ] 
-            else Cmd.none
-        
+        saveCmds = if isChange then Cmd.batch [ Ports.saveTasks (Encode.list encodeTask newModel.tasks), Ports.saveTags (Encode.list encodeTag newModel.tags), Ports.saveInputs (encodeInputs newModel), Task.perform RecordSaveTime Time.now ] else Cmd.none
         portCmd = case msg of
             SetDeadline id_ dateStr -> Ports.requestDateTimestamp { id = id_, dateStr = dateStr }
             _ -> Cmd.none
@@ -181,7 +162,6 @@ update msg model =
         UpdateInput str -> { model | input = str }
         UpdateTagInput str -> { model | tagInput = str }
         SetCategory cat -> { model | activeCategory = cat }
-        
         AddTask ->
             if String.isEmpty model.input then model 
             else { model | tasks = Task { id = model.nextId, content = model.input, completed = False, tags = [], category = model.activeCategory, subtasks = [], deadline = Nothing } :: model.tasks, input = "", nextId = model.nextId + 1 }
@@ -189,8 +169,30 @@ update msg model =
         SetDeadline _ _ -> model 
         
         FinishDeadline data ->
-            let setter (Task t) = Task { t | deadline = data.timestamp }
-            in { model | tasks = updateHelper data.id setter model.tasks }
+            let 
+                isToday ts =
+                    case model.currentTime of
+                        Just now ->
+                            let
+                                y1 = Time.toYear model.zone now
+                                m1 = Time.toMonth model.zone now
+                                d1 = Time.toDay model.zone now
+                                posixD = Time.millisToPosix ts
+                                y2 = Time.toYear model.zone posixD
+                                m2 = Time.toMonth model.zone posixD
+                                d2 = Time.toDay model.zone posixD
+                            in y1 == y2 && m1 == m2 && d1 == d2
+                        Nothing -> False
+
+                setter (Task t) = 
+                    let
+                        newCat = case data.timestamp of
+                            Just ts -> if isToday ts then Today else t.category
+                            Nothing -> t.category
+                    in
+                    Task { t | deadline = data.timestamp, category = newCat }
+            in
+            { model | tasks = updateHelper data.id setter model.tasks }
 
         MoveTask id newCat -> { model | tasks = updateCategoryRecursive id newCat model.tasks }
         StartEdit tid c -> { model | editingId = Just tid, editInput = c }
@@ -204,7 +206,7 @@ update msg model =
         DeleteTask tid -> { model | tasks = deleteHelper tid model.tasks }
         MoveRight tid -> { model | tasks = indentRight tid model.tasks }
         MoveLeft tid -> let (upd, ext) = indentLeft tid model.tasks in { model | tasks = upd ++ ext }
-        CreateGlobalTag -> if String.isEmpty model.tagInput || List.any (\t -> t.name == model.tagInput) model.tags then model else { model | tags = model.tags ++ [{ name = model.tagInput, colour = "#5c3df5" }], tagInput = "" }
+        CreateGlobalTag -> if String.isEmpty model.tagInput || List.any (\t -> t.name == model.tagInput) model.tags then model else { model | tasks = model.tasks, tags = model.tags ++ [{ name = model.tagInput, colour = "#5c3df5" }], tagInput = "" }
         DeleteGlobalTag n -> { model | tags = List.filter (\t -> t.name /= n) model.tags, tasks = List.map (stripTag n) model.tasks }
         ToggleTagOnTask tid n -> { model | tasks = updateHelper tid (\(Task t) -> Task { t | tags = if List.member n t.tags then List.filter ((/=) n) t.tags else n :: t.tags }) model.tasks }
         SetTag t -> { model | activeTag = t }
@@ -213,6 +215,35 @@ update msg model =
         ClearAll -> { model | tasks = [], tags = [] }
 
 -- 5. HELPERS
+
+millisToIsoDate : Time.Zone -> Maybe Int -> String
+millisToIsoDate zone maybeMillis =
+    case maybeMillis of
+        Just ms ->
+            let
+                posix = Time.millisToPosix ms
+                y = String.fromInt (Time.toYear zone posix)
+                m = String.padLeft 2 '0' (String.fromInt (monthToInt (Time.toMonth zone posix)))
+                d = String.padLeft 2 '0' (String.fromInt (Time.toDay zone posix))
+            in
+            y ++ "-" ++ m ++ "-" ++ d
+        Nothing -> ""
+
+monthToInt : Time.Month -> Int
+monthToInt month =
+    case month of
+        Time.Jan -> 1
+        Time.Feb -> 2
+        Time.Mar -> 3
+        Time.Apr -> 4
+        Time.May -> 5
+        Time.Jun -> 6
+        Time.Jul -> 7
+        Time.Aug -> 8
+        Time.Sep -> 9
+        Time.Oct -> 10
+        Time.Nov -> 11
+        Time.Dec -> 12
 
 updateCategoryRecursive id newCat list =
     List.map (\(Task t) -> if t.id == id then applyCategoryToTree newCat (Task t) else Task { t | subtasks = updateCategoryRecursive id newCat t.subtasks }) list
@@ -226,18 +257,16 @@ stripTag n (Task t) = Task { t | tags = List.filter ((/=) n) t.tags, subtasks = 
 filterComp tasks = tasks |> List.filter (\(Task t) -> not t.completed) |> List.map (\(Task t) -> Task { t | subtasks = filterComp t.subtasks })
 countAll list = List.foldl (\(Task t) acc -> 1 + acc + countAll t.subtasks) 0 list
 countDone list = List.foldl (\(Task t) acc -> (if t.completed then 1 else 0) + acc + countDone t.subtasks) 0 list
+countCategory cat tasks = tasks |> List.filter (\(Task t) -> t.category == cat) |> List.length
 
 indentRight targetId list = case list of 
     [] -> []
     [only] -> let (Task t) = only in [ Task { t | subtasks = indentRight targetId t.subtasks } ]
     (Task f) :: (Task s) :: r -> if s.id == targetId then [ Task { f | subtasks = f.subtasks ++ [Task s] } ] ++ r else Task { f | subtasks = indentRight targetId f.subtasks } :: indentRight targetId (Task s :: r)
 
-indentLeft targetId list = 
-    let folder (Task t) (accL, accE) = if t.id == targetId then (accL, accE ++ [Task t]) else let (newS, ext) = indentLeft targetId t.subtasks in (accL ++ [Task { t | subtasks = newS }], accE ++ ext) 
-    in List.foldl folder ([], []) list
+indentLeft targetId list = let folder (Task t) (accL, accE) = if t.id == targetId then (accL, accE ++ [Task t]) else let (newS, ext) = indentLeft targetId t.subtasks in (accL ++ [Task { t | subtasks = newS }], accE ++ ext) in List.foldl folder ([], []) list
 
-toggleAndCheckParent targetId list = 
-    List.map (\(Task t) -> let updatedSub = if t.id == targetId then t.subtasks else toggleAndCheckParent targetId t.subtasks in Task { t | subtasks = updatedSub, completed = if t.id == targetId then not t.completed else if not (List.isEmpty updatedSub) then List.all (\(Task sub) -> sub.completed) updatedSub else t.completed }) list
+toggleAndCheckParent targetId list = List.map (\(Task t) -> let updatedSub = if t.id == targetId then t.subtasks else toggleAndCheckParent targetId t.subtasks in Task { t | subtasks = updatedSub, completed = if t.id == targetId then not t.completed else if not (List.isEmpty updatedSub) then List.all (\(Task sub) -> sub.completed) updatedSub else t.completed }) list
 
 -- 6. VIEW
 
@@ -249,17 +278,24 @@ viewProgress subtasks =
         rS = if percentage >= 50 then [ style "background" "inherit", style "transform" ("rotate(" ++ String.fromFloat (deg - 180) ++ "deg)") ] else [ style "background" "#ccc", style "transform" ("rotate(" ++ String.fromFloat deg ++ "deg)") ]
     in div [ class "progress-holder", style "width" "34px", style "height" "34px" ] [ div [ class "semi-circle" ] [], div [ class "left-block" ] [], div (class "right-block" :: rS) [], div [ class "mask", style "width" "76%", style "height" "76%", style "top" "12%", style "left" "12%" ] [ span [ style "font-size" "9px", style "top" "calc(50% - 6px)" ] [ text (String.fromInt (round percentage) ++ "%") ] ] ]
 
-viewDeadline : Maybe Time.Posix -> Maybe Int -> Html Msg
-viewDeadline current deadline =
+viewDeadline : Time.Zone -> Maybe Time.Posix -> Maybe Int -> Html Msg
+viewDeadline zone current deadline =
     case (current, deadline) of
         (Just now, Just target) ->
             let
-                diff = (toFloat target - toFloat (Time.posixToMillis now)) / (1000 * 60 * 60 * 24)
+                getStartOfDay millis =
+                    let p = Time.millisToPosix millis
+                    in (Time.toYear zone p * 366) + (monthToInt (Time.toMonth zone p) * 31) + Time.toDay zone p
+
+                todayStart = getStartOfDay (Time.posixToMillis now)
+                targetDay = getStartOfDay target
+                diff = targetDay - todayStart
+                
                 (txt, color) = 
                     if diff < 0 then ("Overdue", "#ff4444")
-                    else if diff < 1 then ("Today", "#5c3df5")
-                    else if diff < 2 then ("Tomorrow", "#3d5cf5")
-                    else ("In " ++ String.fromInt (round diff) ++ " days", "#888")
+                    else if diff == 0 then ("Today", "#5c3df5")
+                    else if diff == 1 then ("Tomorrow", "#3d5cf5")
+                    else ("In " ++ String.fromInt diff ++ " days", "#888")
             in
             span [ style "font-size" "10px", style "color" color, style "font-weight" "bold", style "margin" "0 10px" ] [ text txt ]
         _ -> text ""
@@ -268,17 +304,20 @@ viewTaskItem : Model -> Task -> ( String, Html Msg )
 viewTaskItem model (Task t) =
     let 
         isEditing = model.editingId == Just t.id
-        toCat str = case str of 
-            "Today" -> Today
-            "Upcoming" -> Upcoming
-            "Anytime" -> Anytime
-            "Someday" -> Someday
-            "Logbook" -> Logbook
-            _ -> Anytime
+        
+        toCat str = 
+            case str of 
+                "Today" -> Today
+                "Upcoming" -> Upcoming
+                "Anytime" -> Anytime
+                "Someday" -> Someday
+                "Logbook" -> Logbook
+                _ -> Anytime
         
         catStr = categoryToString t.category
         taskKey = catStr ++ "-" ++ (String.fromInt t.id)
         viewOption val labelTxt = option [ Attr.value val, selected (catStr == val) ] [ text labelTxt ]
+        pickerValue = millisToIsoDate model.zone t.deadline
     in 
     ( taskKey
     , li [] [ div [ class "task-row-container", style "display" "flex", style "align-items" "center", style "gap" "8px" ] 
@@ -289,8 +328,8 @@ viewTaskItem model (Task t) =
             , if isEditing then input [ value model.editInput, onInput UpdateEditInput, onBlur SaveEdit, onEnter SaveEdit, autofocus True, style "flex-grow" "1", class "edit-input" ] []
               else span [ style "flex-grow" "1", class (if t.completed then "task-item-checked" else ""), onClick (StartEdit t.id t.content) ] [ text t.content, span [ class "task-strike" ] [] ]
             
-            , viewDeadline model.currentTime t.deadline
-            , input [ type_ "date", onInput (SetDeadline t.id), style "font-size" "10px", style "border" "none", style "opacity" "0.5" ] []
+            , viewDeadline model.zone model.currentTime t.deadline
+            , input [ type_ "date", value pickerValue, onInput (SetDeadline t.id), style "font-size" "10px", style "border" "none", style "opacity" "0.5" ] []
 
             , if not (List.isEmpty t.subtasks) then viewProgress t.subtasks else text ""
             , div [ style "display" "flex", style "gap" "3px" ] (List.map (\tag -> button [ onClick (ToggleTagOnTask t.id tag.name), style "font-size" "10px", style "background" (if List.member tag.name t.tags then "#5c3df5" else "#f0f0f0"), style "color" (if List.member tag.name t.tags then "white" else "#666"), style "border" "none", style "border-radius" "3px" ] [ text tag.name ]) model.tags)
@@ -300,54 +339,23 @@ viewTaskItem model (Task t) =
     )
 
 viewRoot model = 
-    let 
-        filteredByCat = if model.activeCategory == Logbook then model.tasks else List.filter (\(Task t) -> t.category == model.activeCategory) model.tasks
+    let filteredByCat = if model.activeCategory == Logbook then model.tasks else List.filter (\(Task t) -> t.category == model.activeCategory) model.tasks
         filtered = filteredByCat |> List.filter (\(Task t) -> if model.activeTag == "all" then True else List.member model.activeTag t.tags)
-        
         getBadgeCount c = if c == Logbook then List.length model.tasks else List.length (List.filter (\(Task t) -> t.category == c) model.tasks)
-        
         saveTimeLabel = case model.lastSaved of 
             Just t -> span [ style "font-size" "12px", style "color" "#888", style "margin-left" "10px" ] [ text ("Saved: " ++ String.fromInt (Time.toHour model.zone t) ++ ":" ++ String.fromInt (Time.toMinute model.zone t)) ]
             Nothing -> text ""
-    in 
-    div [ class "wrap" ] 
-        [ h1 [] [ text "Todo", saveTimeLabel ]
-        , div [ class "app" ] 
-            [ div [ class "category-bar", style "margin-bottom" "20px" ] (List.map (\c -> button [ onClick (SetCategory c), class (if model.activeCategory == c then "btn-active" else "") ] [ text (categoryToString c ++ " (" ++ String.fromInt (getBadgeCount c) ++ ")") ]) [Today, Upcoming, Anytime, Someday, Logbook])
-            , Html.form [ class "task-form", onSubmit AddTask ] [ input [ placeholder "New Task...", value model.input, onInput UpdateInput ] [], button [ Attr.type_ "submit" ] [ text "Add" ] ]
-            , div [ class "task-tags" ] 
-                [ div [ style "display" "flex", style "gap" "10px" ] [ input [ placeholder "Tag name", value model.tagInput, onInput UpdateTagInput, style "flex-grow" "1" ] [], button [ onClick CreateGlobalTag ] [ text "Add Tag" ] ]
-                , div [ style "display" "flex", style "gap" "5px", style "margin-top" "5px" ] (List.map (\tag -> span [ class "tag-label" ] [ text tag.name, button [ onClick (DeleteGlobalTag tag.name), style "border" "none", style "background" "none", style "color" "red" ] [ text "×" ] ]) model.tags) 
-                ]
-            , Keyed.ul [ class "task-list" ] (List.map (viewTaskItem model) filtered)
-            , div [ class "task-controls" ] 
-                [ button [ onClick (SetTag "all"), class (if model.activeTag == "all" then "btn-active" else "") ] [ text "All Tags" ]
-                , div [ style "display" "inline-block", style "margin-left" "10px" ] (List.map (\t -> button [ onClick (SetTag t.name), class (if model.activeTag == t.name then "btn-active" else "") ] [ text t.name ]) model.tags)
-                , div [ style "float" "right", style "display" "flex", style "gap" "10px" ] 
-                    [ button [ onClick ClearCompleted ] [ text "Clear Completed" ], button [ onClick ClearAll, style "background" "#ff4444", style "color" "white", style "border" "none", style "padding" "0 10px", style "border-radius" "4px" ] [ text "Clear All" ] ] 
-                ] 
-            ] 
-        ]
+    in div [ class "wrap" ] [ h1 [] [ text "Todo", saveTimeLabel ], div [ class "app" ] [ div [ class "category-bar", style "margin-bottom" "20px" ] (List.map (\c -> button [ onClick (SetCategory c), class (if model.activeCategory == c then "btn-active" else "") ] [ text (categoryToString c ++ " (" ++ String.fromInt (getBadgeCount c) ++ ")") ]) [Today, Upcoming, Anytime, Someday, Logbook]), Html.form [ class "task-form", onSubmit AddTask ] [ input [ placeholder "New Task...", value model.input, onInput UpdateInput ] [], button [ Attr.type_ "submit" ] [ text "Add" ] ], div [ class "task-tags" ] [ div [ style "display" "flex", style "gap" "10px" ] [ input [ placeholder "Tag name", value model.tagInput, onInput UpdateTagInput, style "flex-grow" "1" ] [], button [ onClick CreateGlobalTag ] [ text "Add Tag" ] ], div [ style "display" "flex", style "gap" "5px", style "margin-top" "5px" ] (List.map (\tag -> span [ class "tag-label" ] [ text tag.name, button [ onClick (DeleteGlobalTag tag.name), style "border" "none", style "background" "none", style "color" "red" ] [ text "×" ] ]) model.tags) ], Keyed.ul [ class "task-list" ] (List.map (viewTaskItem model) filtered), div [ class "task-controls" ] [ button [ onClick (SetTag "all"), class (if model.activeTag == "all" then "btn-active" else "") ] [ text "All Tags" ], div [ style "display" "inline-block", style "margin-left" "10px" ] (List.map (\t -> button [ onClick (SetTag t.name), class (if model.activeTag == t.name then "btn-active" else "") ] [ text t.name ]) model.tags) , div [ style "float" "right", style "display" "flex", style "gap" "10px" ] [ button [ onClick ClearCompleted ] [ text "Clear Completed" ], button [ onClick ClearAll, style "background" "#ff4444", style "color" "white", style "border" "none", style "padding" "0 10px", style "border-radius" "4px" ] [ text "Clear All" ] ] ] ] ]
 
 onEnter msg = Html.Events.on "keydown" (Decode.field "key" Decode.string |> Decode.andThen (\k -> if k == "Enter" then Decode.succeed msg else Decode.fail ""))
 
 init flags =
-    let 
-        dTasks = Decode.decodeValue (Decode.field "tasks" (Decode.list taskDecoder)) flags |> Result.withDefault []
+    let dTasks = Decode.decodeValue (Decode.field "tasks" (Decode.list taskDecoder)) flags |> Result.withDefault []
         dTags = Decode.decodeValue (Decode.field "tags" (Decode.list tagDecoder)) flags |> Result.withDefault []
         sInp = Decode.decodeValue (Decode.field "taskInput" Decode.string) flags |> Result.withDefault ""
         sTInp = Decode.decodeValue (Decode.field "tagInput" Decode.string) flags |> Result.withDefault ""
-        
         findMaxId list currentMax = List.foldl (\(Task t) acc -> findMaxId t.subtasks (max acc t.id)) currentMax list
         mId = findMaxId dTasks 0
-    in 
-    ( { initialModel | tasks = dTasks, tags = dTags, input = sInp, tagInput = sTInp, nextId = mId + 1 }
-    , Cmd.batch [ Task.perform Tick Time.now, Task.perform AdjustTimeZone Time.here ] 
-    )
+    in ( { initialModel | tasks = dTasks, tags = dTags, input = sInp, tagInput = sTInp, nextId = mId + 1 }, Task.perform Tick Time.now )
 
-main = Browser.element 
-    { init = init
-    , update = updateWithStorage
-    , view = viewRoot
-    , subscriptions = \_ -> Ports.receiveDateTimestamp FinishDeadline 
-    }
+main = Browser.element { init = init, update = updateWithStorage, view = viewRoot, subscriptions = \_ -> Ports.receiveDateTimestamp FinishDeadline }
