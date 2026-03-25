@@ -28,6 +28,8 @@ type Task
         , deadline : Maybe Int 
         }
 
+type alias Tag = { name : String, colour : String }
+
 type alias Model =
     { tasks : List Task
     , input : String
@@ -42,9 +44,6 @@ type alias Model =
     , currentTime : Maybe Time.Posix
     , zone : Time.Zone
     }
-
-type alias Tag = { name : String, colour : String }
-type Filter = All | Active | Completed
 
 initialModel : Model
 initialModel =
@@ -87,8 +86,16 @@ encodeTask (Task t) =
                             Nothing -> Encode.null)
         ]
 
-encodeTag tag = Encode.object [ ("name", Encode.string tag.name), ("colour", Encode.string tag.colour) ]
-encodeInputs model = Encode.object [ ("taskInput", Encode.string model.input), ("tagInput", Encode.string model.tagInput) ]
+encodeTag : Tag -> Encode.Value
+encodeTag tag =
+    Encode.object [ ("name", Encode.string tag.name), ("colour", Encode.string tag.colour) ]
+
+encodeInputs : Model -> Encode.Value
+encodeInputs model =
+    Encode.object 
+        [ ("taskInput", Encode.string model.input)
+        , ("tagInput", Encode.string model.tagInput) 
+        ]
 
 -- 3. JSON DECODERS
 
@@ -107,12 +114,17 @@ taskDecoder : Decoder Task
 taskDecoder =
     Decode.map7 (\id_ content completed tags category subtasks deadline -> 
         Task { id = id_, content = content, completed = completed, tags = tags, category = category, subtasks = subtasks, deadline = deadline })
-        (Decode.field "id" Decode.int) (Decode.field "content" Decode.string) (Decode.field "completed" Decode.bool)
-        (Decode.field "tags" (Decode.list Decode.string)) (Decode.field "category" categoryDecoder)
+        (Decode.field "id" Decode.int) 
+        (Decode.field "content" Decode.string) 
+        (Decode.field "completed" Decode.bool)
+        (Decode.field "tags" (Decode.list Decode.string)) 
+        (Decode.field "category" categoryDecoder)
         (Decode.lazy (\_ -> Decode.field "subtasks" (Decode.list taskDecoder)))
         (Decode.maybe (Decode.field "deadline" Decode.int))
 
-tagDecoder = Decode.map2 Tag (Decode.field "name" Decode.string) (Decode.field "colour" Decode.string)
+tagDecoder : Decoder Tag
+tagDecoder = 
+    Decode.map2 Tag (Decode.field "name" Decode.string) (Decode.field "colour" Decode.string)
 
 -- 4. UPDATE
 
@@ -129,6 +141,7 @@ updateWithStorage msg model =
         newModel = update msg model
         isChange = case msg of
             UpdateInput _ -> True
+            UpdateTagInput _ -> True
             AddTask -> True
             AddSubtask _ -> True
             DeleteTask _ -> True
@@ -140,9 +153,19 @@ updateWithStorage msg model =
             ClearAll -> True
             SetCategory _ -> True
             ToggleTagOnTask _ _ -> True
+            CreateGlobalTag -> True
+            DeleteGlobalTag _ -> True
             _ -> False
         
-        saveCmds = if isChange then Cmd.batch [ Ports.saveTasks (Encode.list encodeTask newModel.tasks), Ports.saveTags (Encode.list encodeTag newModel.tags), Ports.saveInputs (encodeInputs newModel), Task.perform RecordSaveTime Time.now ] else Cmd.none
+        saveCmds = 
+            if isChange then 
+                Cmd.batch 
+                    [ Ports.saveTasks (Encode.list encodeTask newModel.tasks)
+                    , Ports.saveTags (Encode.list encodeTag newModel.tags)
+                    , Ports.saveInputs (encodeInputs newModel)
+                    , Task.perform RecordSaveTime Time.now 
+                    ] 
+            else Cmd.none
         
         portCmd = case msg of
             SetDeadline id_ dateStr -> Ports.requestDateTimestamp { id = id_, dateStr = dateStr }
@@ -203,16 +226,18 @@ stripTag n (Task t) = Task { t | tags = List.filter ((/=) n) t.tags, subtasks = 
 filterComp tasks = tasks |> List.filter (\(Task t) -> not t.completed) |> List.map (\(Task t) -> Task { t | subtasks = filterComp t.subtasks })
 countAll list = List.foldl (\(Task t) acc -> 1 + acc + countAll t.subtasks) 0 list
 countDone list = List.foldl (\(Task t) acc -> (if t.completed then 1 else 0) + acc + countDone t.subtasks) 0 list
-countCategory cat tasks = tasks |> List.filter (\(Task t) -> t.category == cat) |> List.length
 
 indentRight targetId list = case list of 
     [] -> []
     [only] -> let (Task t) = only in [ Task { t | subtasks = indentRight targetId t.subtasks } ]
     (Task f) :: (Task s) :: r -> if s.id == targetId then [ Task { f | subtasks = f.subtasks ++ [Task s] } ] ++ r else Task { f | subtasks = indentRight targetId f.subtasks } :: indentRight targetId (Task s :: r)
 
-indentLeft targetId list = let folder (Task t) (accL, accE) = if t.id == targetId then (accL, accE ++ [Task t]) else let (newS, ext) = indentLeft targetId t.subtasks in (accL ++ [Task { t | subtasks = newS }], accE ++ ext) in List.foldl folder ([], []) list
+indentLeft targetId list = 
+    let folder (Task t) (accL, accE) = if t.id == targetId then (accL, accE ++ [Task t]) else let (newS, ext) = indentLeft targetId t.subtasks in (accL ++ [Task { t | subtasks = newS }], accE ++ ext) 
+    in List.foldl folder ([], []) list
 
-toggleAndCheckParent targetId list = List.map (\(Task t) -> let updatedSub = if t.id == targetId then t.subtasks else toggleAndCheckParent targetId t.subtasks in Task { t | subtasks = updatedSub, completed = if t.id == targetId then not t.completed else if not (List.isEmpty updatedSub) then List.all (\(Task sub) -> sub.completed) updatedSub else t.completed }) list
+toggleAndCheckParent targetId list = 
+    List.map (\(Task t) -> let updatedSub = if t.id == targetId then t.subtasks else toggleAndCheckParent targetId t.subtasks in Task { t | subtasks = updatedSub, completed = if t.id == targetId then not t.completed else if not (List.isEmpty updatedSub) then List.all (\(Task sub) -> sub.completed) updatedSub else t.completed }) list
 
 -- 6. VIEW
 
@@ -243,14 +268,13 @@ viewTaskItem : Model -> Task -> ( String, Html Msg )
 viewTaskItem model (Task t) =
     let 
         isEditing = model.editingId == Just t.id
-        toCat str = 
-            case str of 
-                "Today" -> Today
-                "Upcoming" -> Upcoming
-                "Anytime" -> Anytime
-                "Someday" -> Someday
-                "Logbook" -> Logbook
-                _ -> Anytime
+        toCat str = case str of 
+            "Today" -> Today
+            "Upcoming" -> Upcoming
+            "Anytime" -> Anytime
+            "Someday" -> Someday
+            "Logbook" -> Logbook
+            _ -> Anytime
         
         catStr = categoryToString t.category
         taskKey = catStr ++ "-" ++ (String.fromInt t.id)
@@ -279,20 +303,51 @@ viewRoot model =
     let 
         filteredByCat = if model.activeCategory == Logbook then model.tasks else List.filter (\(Task t) -> t.category == model.activeCategory) model.tasks
         filtered = filteredByCat |> List.filter (\(Task t) -> if model.activeTag == "all" then True else List.member model.activeTag t.tags)
+        
         getBadgeCount c = if c == Logbook then List.length model.tasks else List.length (List.filter (\(Task t) -> t.category == c) model.tasks)
+        
         saveTimeLabel = case model.lastSaved of 
             Just t -> span [ style "font-size" "12px", style "color" "#888", style "margin-left" "10px" ] [ text ("Saved: " ++ String.fromInt (Time.toHour model.zone t) ++ ":" ++ String.fromInt (Time.toMinute model.zone t)) ]
             Nothing -> text ""
-    in div [ class "wrap" ] [ h1 [] [ text "Todo", saveTimeLabel ], div [ class "app" ] [ div [ class "category-bar", style "margin-bottom" "20px" ] (List.map (\c -> button [ onClick (SetCategory c), class (if model.activeCategory == c then "btn-active" else "") ] [ text (categoryToString c ++ " (" ++ String.fromInt (getBadgeCount c) ++ ")") ]) [Today, Upcoming, Anytime, Someday, Logbook]), Html.form [ class "task-form", onSubmit AddTask ] [ input [ placeholder "New Task...", value model.input, onInput UpdateInput ] [], button [ Attr.type_ "submit" ] [ text "Add" ] ], div [ class "task-tags" ] [ div [ style "display" "flex", style "gap" "10px" ] [ input [ placeholder "Tag name", value model.tagInput, onInput UpdateTagInput, style "flex-grow" "1" ] [], button [ onClick CreateGlobalTag ] [ text "Add Tag" ] ], div [ style "display" "flex", style "gap" "5px", style "margin-top" "5px" ] (List.map (\tag -> span [ class "tag-label" ] [ text tag.name, button [ onClick (DeleteGlobalTag tag.name), style "border" "none", style "background" "none", style "color" "red" ] [ text "×" ] ]) model.tags) ], Keyed.ul [ class "task-list" ] (List.map (viewTaskItem model) filtered), div [ class "task-controls" ] [ button [ onClick (SetTag "all"), class (if model.activeTag == "all" then "btn-active" else "") ] [ text "All Tags" ], div [ style "display" "inline-block", style "margin-left" "10px" ] (List.map (\t -> button [ onClick (SetTag t.name), class (if model.activeTag == t.name then "btn-active" else "") ] [ text t.name ]) model.tags), div [ style "float" "right", style "display" "flex", style "gap" "10px" ] [ button [ onClick ClearCompleted ] [ text "Clear Completed" ], button [ onClick ClearAll, style "background" "#ff4444", style "color" "white", style "border" "none", style "padding" "0 10px", style "border-radius" "4px" ] [ text "Clear All" ] ] ] ] ]
+    in 
+    div [ class "wrap" ] 
+        [ h1 [] [ text "Todo", saveTimeLabel ]
+        , div [ class "app" ] 
+            [ div [ class "category-bar", style "margin-bottom" "20px" ] (List.map (\c -> button [ onClick (SetCategory c), class (if model.activeCategory == c then "btn-active" else "") ] [ text (categoryToString c ++ " (" ++ String.fromInt (getBadgeCount c) ++ ")") ]) [Today, Upcoming, Anytime, Someday, Logbook])
+            , Html.form [ class "task-form", onSubmit AddTask ] [ input [ placeholder "New Task...", value model.input, onInput UpdateInput ] [], button [ Attr.type_ "submit" ] [ text "Add" ] ]
+            , div [ class "task-tags" ] 
+                [ div [ style "display" "flex", style "gap" "10px" ] [ input [ placeholder "Tag name", value model.tagInput, onInput UpdateTagInput, style "flex-grow" "1" ] [], button [ onClick CreateGlobalTag ] [ text "Add Tag" ] ]
+                , div [ style "display" "flex", style "gap" "5px", style "margin-top" "5px" ] (List.map (\tag -> span [ class "tag-label" ] [ text tag.name, button [ onClick (DeleteGlobalTag tag.name), style "border" "none", style "background" "none", style "color" "red" ] [ text "×" ] ]) model.tags) 
+                ]
+            , Keyed.ul [ class "task-list" ] (List.map (viewTaskItem model) filtered)
+            , div [ class "task-controls" ] 
+                [ button [ onClick (SetTag "all"), class (if model.activeTag == "all" then "btn-active" else "") ] [ text "All Tags" ]
+                , div [ style "display" "inline-block", style "margin-left" "10px" ] (List.map (\t -> button [ onClick (SetTag t.name), class (if model.activeTag == t.name then "btn-active" else "") ] [ text t.name ]) model.tags)
+                , div [ style "float" "right", style "display" "flex", style "gap" "10px" ] 
+                    [ button [ onClick ClearCompleted ] [ text "Clear Completed" ], button [ onClick ClearAll, style "background" "#ff4444", style "color" "white", style "border" "none", style "padding" "0 10px", style "border-radius" "4px" ] [ text "Clear All" ] ] 
+                ] 
+            ] 
+        ]
 
 onEnter msg = Html.Events.on "keydown" (Decode.field "key" Decode.string |> Decode.andThen (\k -> if k == "Enter" then Decode.succeed msg else Decode.fail ""))
 
 init flags =
-    let dTasks = Decode.decodeValue (Decode.field "tasks" (Decode.list taskDecoder)) flags |> Result.withDefault []
+    let 
+        dTasks = Decode.decodeValue (Decode.field "tasks" (Decode.list taskDecoder)) flags |> Result.withDefault []
         dTags = Decode.decodeValue (Decode.field "tags" (Decode.list tagDecoder)) flags |> Result.withDefault []
         sInp = Decode.decodeValue (Decode.field "taskInput" Decode.string) flags |> Result.withDefault ""
         sTInp = Decode.decodeValue (Decode.field "tagInput" Decode.string) flags |> Result.withDefault ""
-        mId = let findM list cur = List.foldl (\(Task t) m -> findM t.subtasks (max m t.id)) cur list in findM dTasks 0
-    in ( { initialModel | tasks = dTasks, tags = dTags, input = sInp, tagInput = sTInp, nextId = mId + 1 }, Task.perform Tick Time.now )
+        
+        findMaxId list currentMax = List.foldl (\(Task t) acc -> findMaxId t.subtasks (max acc t.id)) currentMax list
+        mId = findMaxId dTasks 0
+    in 
+    ( { initialModel | tasks = dTasks, tags = dTags, input = sInp, tagInput = sTInp, nextId = mId + 1 }
+    , Cmd.batch [ Task.perform Tick Time.now, Task.perform AdjustTimeZone Time.here ] 
+    )
 
-main = Browser.element { init = init, update = updateWithStorage, view = viewRoot, subscriptions = \_ -> Ports.receiveDateTimestamp FinishDeadline }
+main = Browser.element 
+    { init = init
+    , update = updateWithStorage
+    , view = viewRoot
+    , subscriptions = \_ -> Ports.receiveDateTimestamp FinishDeadline 
+    }
