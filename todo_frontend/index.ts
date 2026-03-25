@@ -38,3 +38,9 @@ app.ports.saveTags.subscribe((tags: any) => {
 app.ports.saveInputs.subscribe((inputs: any) => {
     localStorage.setItem('todo_inputs', JSON.stringify(inputs));
 });
+
+// Add this to your existing app.ports setup
+app.ports.requestDateTimestamp.subscribe((data: { id: number, dateStr: string }) => {
+    const timestamp = data.dateStr ? new Date(data.dateStr).getTime() : null;
+    app.ports.receiveDateTimestamp.send({ id: data.id, timestamp: timestamp });
+});
