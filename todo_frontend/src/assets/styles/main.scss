@@ -413,3 +413,41 @@ X
     font-family: Arial, sans-serif;
   }
 }
+
+.date-picker-wrap {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.stable-date-picker {
+    font-size: 14px !important; // Larger text
+    border: 1px solid #eee;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    min-width: 180px; // Wider for better scrolling
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: #5c3df5;
+        background: #fcfaff;
+    }
+
+    &:focus {
+        outline: 2px solid #5c3df5;
+        background: #fff;
+        opacity: 1 !important;
+    }
+}
+
+/* Ensure the calendar icon is large and clickable */
+::-webkit-calendar-picker-indicator {
+    padding: 5px;
+    cursor: pointer;
+    filter: sepia(100%) hue-rotate(200deg) brightness(80%); // Makes it "Things 3" Purple
+}
+
+.wrap {
+    max-width: 90%;
+}

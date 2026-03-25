@@ -18,7 +18,7 @@ const savedTags = safeParse('todo_tags', []);
 const savedInputs = safeParse('todo_inputs', { taskInput: "", tagInput: "" });
 
 // 3. START THE ELM APP
-const app = Elm.Main.init({
+const app = (Elm as any).Main.init({
     node: document.getElementById('elm-app'),
     flags: {
         tasks: savedTasks,
@@ -42,16 +42,26 @@ app.ports.saveInputs.subscribe((inputs: any) => {
     localStorage.setItem('todo_inputs', JSON.stringify(inputs));
 });
 
-// DEADLINE LOGIC
+// DEADLINE LOGIC - FIXED TIMEZONE OFFSET
 app.ports.requestDateTimestamp.subscribe((data: { id: number, dateStr: string }) => {
-    // Validating the date string before converting
-    const timestamp = data.dateStr ? new Date(data.dateStr).getTime() : null;
+    if (!data.dateStr) {
+        app.ports.receiveDateTimestamp.send({ id: data.id, timestamp: null });
+        return;
+    }
+
+    // Input format: "2026-03-25T15:00"
+    const [datePart, timePart] = data.dateStr.split('T');
+    const [year, month, day] = datePart.split('-').map(Number);
+    const [hours, minutes] = timePart.split(':').map(Number);
+
+    // This creates a Date object using LOCAL system time parts
+    // Month is 0-indexed in JS (January is 0), so we subtract 1
+    const localDate = new Date(year, month - 1, day, hours, minutes);
     
-    // Send back to Elm immediately
     if (app.ports.receiveDateTimestamp) {
         app.ports.receiveDateTimestamp.send({ 
             id: data.id, 
-            timestamp: timestamp 
+            timestamp: localDate.getTime() 
         });
     }
 });

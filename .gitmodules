@@ -1,0 +1,3 @@
+[submodule "mw-ui-kit"]
+	path = mw-ui-kit
+	url = https://github.com/martenwindler/mw-ui-kit.git
