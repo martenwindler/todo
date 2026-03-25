@@ -4,7 +4,9 @@ import Browser
 import Html exposing (Html, a, button, div, h1, input, label, li, span, text, ul)
 import Html.Attributes as Attr exposing (class, checked, href, placeholder, style, value, autofocus)
 import Html.Events exposing (onCheck, onClick, onInput, onSubmit, onBlur)
-import Json.Decode as Decode
+import Json.Decode as Decode exposing (Decoder)
+import Json.Encode as Encode
+import Ports
 import Svg exposing (svg, path)
 import Svg.Attributes as SvgAttr
 
@@ -36,18 +38,55 @@ type alias Model =
 
 initialModel : Model
 initialModel =
-    { tasks = [ Task { id = 1, content = "Main Project", completed = False, tags = [], subtasks = [] } ]
+    { tasks = []
     , input = ""
     , tagInput = ""
     , activeFilter = All
     , activeTag = "all"
     , tags = [] 
-    , nextId = 2
+    , nextId = 1
     , editingId = Nothing
     , editInput = ""
     }
 
--- 2. UPDATE
+-- 2. JSON ENCODERS (For Saving)
+
+encodeTask : Task -> Encode.Value
+encodeTask (Task t) =
+    Encode.object
+        [ ("id", Encode.int t.id)
+        , ("content", Encode.string t.content)
+        , ("completed", Encode.bool t.completed)
+        , ("tags", Encode.list Encode.string t.tags)
+        , ("subtasks", Encode.list encodeTask t.subtasks)
+        ]
+
+encodeTag : Tag -> Encode.Value
+encodeTag tag =
+    Encode.object
+        [ ("name", Encode.string tag.name)
+        , ("colour", Encode.string tag.colour)
+        ]
+
+-- 3. JSON DECODERS (For Loading via Flags)
+
+taskDecoder : Decoder Task
+taskDecoder =
+    Decode.map5 (\id content completed tags subtasks -> 
+        Task { id = id, content = content, completed = completed, tags = tags, subtasks = subtasks })
+        (Decode.field "id" Decode.int)
+        (Decode.field "content" Decode.string)
+        (Decode.field "completed" Decode.bool)
+        (Decode.field "tags" (Decode.list Decode.string))
+        (Decode.lazy (\_ -> Decode.field "subtasks" (Decode.list taskDecoder)))
+
+tagDecoder : Decoder Tag
+tagDecoder =
+    Decode.map2 Tag
+        (Decode.field "name" Decode.string)
+        (Decode.field "colour" Decode.string)
+
+-- 4. UPDATE
 
 type Msg
     = UpdateInput String
@@ -68,26 +107,19 @@ type Msg
     | UpdateEditInput String
     | SaveEdit
     | CancelEdit
-    | ClearCompleted -- Added back
+    | ClearCompleted
 
-toggleAndCheckParent : Int -> List Task -> List Task
-toggleAndCheckParent targetId list =
-    List.map
-        (\(Task t) ->
-            let
-                updatedSubtasks = 
-                    if t.id == targetId then t.subtasks 
-                    else toggleAndCheckParent targetId t.subtasks
-
-                newCompleted =
-                    if t.id == targetId then not t.completed
-                    else if not (List.isEmpty updatedSubtasks) then
-                        List.all (\(Task sub) -> sub.completed) updatedSubtasks
-                    else t.completed
-            in
-            Task { t | subtasks = updatedSubtasks, completed = newCompleted }
-        )
-        list
+-- This wrapper triggers the ports every time the model is updated
+updateWithStorage : Msg -> Model -> ( Model, Cmd Msg )
+updateWithStorage msg model =
+    let
+        newModel = update msg model
+        
+        -- Commands to save to localStorage
+        saveTasksCmd = Ports.saveTasks (Encode.list encodeTask newModel.tasks)
+        saveTagsCmd = Ports.saveTags (Encode.list encodeTag newModel.tags)
+    in
+    ( newModel, Cmd.batch [ saveTasksCmd, saveTagsCmd ] )
 
 update : Msg -> Model -> Model
 update msg model =
@@ -135,17 +167,20 @@ update msg model =
         SetFilter f -> { model | activeFilter = f }
         SetTag t -> { model | activeTag = t }
         Reset -> initialModel
-
         ClearCompleted ->
-            let
-                filterComp tasks =
-                    tasks
-                        |> List.filter (\(Task t) -> not t.completed)
-                        |> List.map (\(Task t) -> Task { t | subtasks = filterComp t.subtasks })
-            in
-            { model | tasks = filterComp model.tasks }
+            let filterComp tasks = tasks |> List.filter (\(Task t) -> not t.completed) |> List.map (\(Task t) -> Task { t | subtasks = filterComp t.subtasks })
+            in { model | tasks = filterComp model.tasks }
 
--- Helpers
+-- (Helpers toggleAndCheckParent, updateHelper, deleteHelper, indentRight, indentLeft, countAll, countDone remain same as your provided code)
+
+toggleAndCheckParent targetId list =
+    List.map (\(Task t) ->
+            let
+                updatedSubtasks = if t.id == targetId then t.subtasks else toggleAndCheckParent targetId t.subtasks
+                newCompleted = if t.id == targetId then not t.completed else if not (List.isEmpty updatedSubtasks) then List.all (\(Task sub) -> sub.completed) updatedSubtasks else t.completed
+            in Task { t | subtasks = updatedSubtasks, completed = newCompleted }
+        ) list
+
 updateHelper id fn list = List.map (\(Task t) -> if t.id == id then fn (Task t) else Task { t | subtasks = updateHelper id fn t.subtasks }) list
 deleteHelper id list = list |> List.filter (\(Task t) -> t.id /= id) |> List.map (\(Task t) -> Task { t | subtasks = deleteHelper id t.subtasks })
 indentRight targetId list = case list of
@@ -154,11 +189,11 @@ indentRight targetId list = case list of
     (Task f) :: (Task s) :: r -> if s.id == targetId then [ Task { f | subtasks = f.subtasks ++ [Task s] } ] ++ r else Task { f | subtasks = indentRight targetId f.subtasks } :: indentRight targetId (Task s :: r)
 indentLeft targetId list = let folder (Task t) (accL, accE) = if t.id == targetId then (accL, accE ++ [Task t]) else let (newS, ext) = indentLeft targetId t.subtasks in (accL ++ [Task { t | subtasks = newS }], accE ++ ext) in List.foldl folder ([], []) list
 
--- 3. PROGRESS LOGIC
 countAll list = List.foldl (\(Task t) acc -> 1 + acc + countAll t.subtasks) 0 list
 countDone list = List.foldl (\(Task t) acc -> (if t.completed then 1 else 0) + acc + countDone t.subtasks) 0 list
 
--- 4. VIEW
+-- 5. VIEW (Remains largely the same as your code)
+
 viewProgress subtasks =
     let
         total = countAll subtasks
@@ -201,4 +236,44 @@ viewControls m = div [ class "task-controls" ] [ button [ onClick (SetTag "all")
 
 viewRoot model = div [ class "wrap" ] [ h1 [] [ text "Todo" ], div [ class "app" ] [ viewForm model.input, viewTagManager model, ul [ class "task-list" ] (List.map (viewTaskItem model) model.tasks), viewControls model ] ]
 
-main = Browser.sandbox { init = initialModel, update = update, view = viewRoot }
+-- 6. MAIN & INIT
+
+init : Decode.Value -> ( Model, Cmd Msg )
+init flags =
+    let
+        -- Read tasks from flags
+        decodedTasks = 
+            Decode.decodeValue (Decode.field "tasks" (Decode.list taskDecoder)) flags
+                |> Result.withDefault []
+
+        -- Read tags from flags
+        decodedTags = 
+            Decode.decodeValue (Decode.field "tags" (Decode.list tagDecoder)) flags
+                |> Result.withDefault []
+
+        -- Calculate the nextId based on existing tasks
+        maxId = 
+            let
+                findMaxId list currentMax =
+                    List.foldl (\(Task t) m -> findMaxId t.subtasks (max m t.id)) currentMax list
+            in
+            findMaxId decodedTasks 0
+
+        model = initialModel
+    in
+    ( { model 
+        | tasks = decodedTasks
+        , tags = decodedTags
+        , nextId = maxId + 1 
+      }
+    , Cmd.none 
+    )
+
+main : Program Decode.Value Model Msg
+main =
+    Browser.element
+        { init = init
+        , update = updateWithStorage
+        , view = viewRoot
+        , subscriptions = \_ -> Sub.none
+        }

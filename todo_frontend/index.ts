@@ -1,94 +1,29 @@
 import { Elm } from './src/Main.elm';
 import "./src/assets/styles/main.scss";
 
-// --- INITIALISIERUNG ---
+// 1. PULL DATA FROM BROWSER STORAGE
+// We use 'todo_tasks' and 'todo_tags' to match the names in our ports
+const savedTasks = localStorage.getItem('todo_tasks');
+const savedTags = localStorage.getItem('todo_tags');
 
-// Wir laden gespeicherte Daten direkt beim Start, um sie als Flags oder via Port zu senden
-const savedConfig = localStorage.getItem('stopwatch_config');
-const savedLaps = localStorage.getItem('stopwatch_laps');
-
+// 2. START THE ELM APP
 const app = Elm.Main.init({
     node: document.getElementById('elm-app'),
     flags: {
-        backendUrl: "" // Bleibt leer, da wir lokal arbeiten
+        // We parse the string back into JSON. 
+        // If it's empty, we pass null so Elm handles the default.
+        tasks: savedTasks ? JSON.parse(savedTasks) : null,
+        tags: savedTags ? JSON.parse(savedTags) : null
     }
 });
 
-// Sobald Elm bereit ist, schicken wir die geladenen Daten in die App
-if (savedConfig) {
-    setTimeout(() => {
-        sendToElm('configReceiver', JSON.parse(savedConfig));
-    }, 100);
-}
-
-// --- HELPER: ELM PORTS ---
-
-const subscribeSafe = (portName: string, callback: (data: any) => void) => {
-    const port = (app.ports as any)[portName];
-    if (port && port.subscribe) port.subscribe(callback);
-};
-
-const sendToElm = (portName: string, data: any) => {
-    const port = (app.ports as any)[portName];
-    if (port && port.send) port.send(data);
-};
-
-// --- CORE LOGIC: BROWSER INTERACTION ---
-
-/**
- * Aktualisiert den Titel des Browser-Tabs.
- * Wird von Elm bei jedem "Tick" aufgerufen.
- */
-subscribeSafe('setPageTitle', (title: string) => {
-    document.title = title;
+// 3. LISTEN FOR SAVES (The "Write" part of CRUD)
+// This triggers every time you add/edit/delete in Elm
+app.ports.saveTasks.subscribe((tasks: any) => {
+    console.log("Saving tasks to localStorage...", tasks);
+    localStorage.setItem('todo_tasks', JSON.stringify(tasks));
 });
 
-/**
- * Speichert die Konfiguration (Nightmode, Format, etc.)
- */
-subscribeSafe('saveConfig', (config: any) => {
-    localStorage.setItem('stopwatch_config', JSON.stringify(config));
-    
-    // Optional: Theme-Klasse am Body toggeln für globales CSS
-    if (config.nightMode) {
-        document.body.classList.add('dark-theme');
-    } else {
-        document.body.classList.remove('dark-theme');
-    }
-});
-
-/**
- * Speichert die Rundenliste separat
- */
-subscribeSafe('saveLaps', (laps: any) => {
-    localStorage.setItem('stopwatch_laps', JSON.stringify(laps));
-});
-
-// --- FULLSCREEN API ---
-
-subscribeSafe('triggerFullscreen', () => {
-    const elem = document.documentElement;
-    if (elem.requestFullscreen) {
-        elem.requestFullscreen();
-    }
-});
-
-subscribeSafe('exitFullscreen', () => {
-    if (document.exitFullscreen) {
-        document.exitFullscreen();
-    }
-});
-
-// --- NAVIGATION ---
-
-subscribeSafe('pushUrl', (url: string) => {
-    history.pushState({}, '', url);
-});
-
-// --- VISIBILITY CHANGE ---
-// Verhindert, dass der Browser den Timer im Hintergrund komplett einfriert
-document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-        // Hier könnte man einen Sync-Trigger an Elm senden, falls nötig
-    }
+app.ports.saveTags.subscribe((tags: any) => {
+    localStorage.setItem('todo_tags', JSON.stringify(tags));
 });
